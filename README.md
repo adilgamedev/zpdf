@@ -13,12 +13,16 @@ A PDF text extraction library written in Zig.
 
 ## Benchmark
 
-Release build (`-Doptimize=ReleaseFast`) vs MuPDF 1.26:
+Text extraction performance vs MuPDF 1.26 (`mutool convert -F text`):
 
-| Document | Pages | zpdf | mutool | Speedup |
-|----------|-------|------|--------|---------|
-| Adobe Acrobat Reference (19MB) | 651 | 116 ms | 474 ms | **4.1x** |
-| Pandas Manual (15MB) | 3,743 | 396 ms | 1,095 ms | **2.8x** |
+| Document | Pages | Size | zpdf | MuPDF | Speedup |
+|----------|-------|------|------|-------|---------|
+| [Adobe Acrobat Reference](https://helpx.adobe.com/pdf/acrobat_reference.pdf) | 651 | 19 MB | 116 ms | 474 ms | **4.1x** |
+| [Pandas Documentation](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | 15 MB | 396 ms | 1,095 ms | **2.8x** |
+
+Peak throughput: **9,452 pages/sec** (Pandas manual)
+
+Build with `zig build -Doptimize=ReleaseFast` for these results.
 
 ## Requirements
 
