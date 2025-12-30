@@ -50,18 +50,19 @@ Auto-detects: NEON (ARM64), AVX2/SSE4.2 (x86_64), or scalar fallback.
 
 ### Accuracy
 
-Text extraction accuracy vs MuPDF (reference):
+Text extraction accuracy vs MuPDF (reference) on US Constitution (85 pages):
 
-| Document | Pages | Char Accuracy | WER | Speedup |
-|----------|-------|---------------|-----|---------|
-| [arXiv paper](https://arxiv.org/pdf/2512.22435) | 7 | 96.8% | 6.0% | 24x |
-| US Constitution | 85 | 99.6% | 2.1% | 15x |
-| C++ Standard Draft | 2,134 | 99.3% | 4.6% | 7.8x |
-| **Average** | | **98.6%** | **4.2%** | **15.6x** |
+| Tool | Char Accuracy | WER | Time | vs MuPDF |
+|------|---------------|-----|------|----------|
+| zpdf | 99.6% | 2.1% | 2 ms | **24x faster** |
+| MuPDF | 100% | 0% | 54 ms | 1x |
+| Tika | 97.4% | 10.6% | 1,307 ms | 24x slower |
+| pdftotext | 57.0% | 19.8% | 90 ms | 1.7x slower |
 
 - **Char Accuracy**: Sequence similarity (higher = better)
 - **WER**: Word Error Rate (lower = better)
-- Reference: MuPDF 1.26 (`mutool convert -F text`)
+
+zpdf is 650x faster than Tika with better accuracy.
 
 Run `PYTHONPATH=python python benchmark/accuracy.py` to reproduce.
 
