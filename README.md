@@ -18,23 +18,23 @@ Text extraction performance vs MuPDF 1.26 (`mutool convert -F text`):
 
 ### Sequential
 
-| Document | Pages | zpdf | MuPDF | Speedup |
-|----------|-------|------|-------|---------|
-| [Adobe Acrobat Reference](https://helpx.adobe.com/pdf/acrobat_reference.pdf) | 651 | 123 ms | 511 ms | **4.2x** |
-| [Pandas Documentation](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | 402 ms | 1,107 ms | **2.8x** |
-| Adobe 10x (merged) | 6,510 | 730 ms | 2,950 ms | **4.0x** |
-| Pandas 10x (merged) | 37,430 | 2,253 ms | 11,096 ms | **4.9x** |
+| Document | Pages | Size | zpdf | MuPDF | Speedup |
+|----------|-------|------|------|-------|---------|
+| [Adobe Acrobat Reference](https://helpx.adobe.com/pdf/acrobat_reference.pdf) | 651 | 19 MB | 137 ms | 530 ms | **3.9x** |
+| [C++ Standard Draft](https://open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf) | 2,134 | 8 MB | 276 ms | 1,038 ms | **3.8x** |
+| [Pandas Documentation](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | 15 MB | 447 ms | 1,216 ms | **2.7x** |
+| [Intel SDM](https://cdrdv2.intel.com/v1/dl/getContent/671200) | 5,252 | 25 MB | 508 ms | 2,250 ms | **4.4x** |
 
 ### Parallel (multi-threaded)
 
-| Document | Pages | zpdf | MuPDF | Speedup |
-|----------|-------|------|-------|---------|
-| Adobe Acrobat Reference | 651 | 57 ms | 482 ms | **8.4x** |
-| Pandas Documentation | 3,743 | 215 ms | 1,109 ms | **5.2x** |
-| Adobe 10x (merged) | 6,510 | 127 ms | 2,935 ms | **23x** |
-| Pandas 10x (merged) | 37,430 | 399 ms | 10,936 ms | **27x** |
+| Document | Pages | Size | zpdf | MuPDF | Speedup |
+|----------|-------|------|------|-------|---------|
+| Adobe Acrobat Reference | 651 | 19 MB | 60 ms | 512 ms | **8.5x** |
+| C++ Standard Draft | 2,134 | 8 MB | 142 ms | 1,020 ms | **7.2x** |
+| Pandas Documentation | 3,743 | 15 MB | 233 ms | 1,204 ms | **5.2x** |
+| Intel SDM | 5,252 | 25 MB | 127 ms | 2,260 ms | **18x** |
 
-Peak throughput: **93,847 pages/sec** (Pandas 10x, parallel)
+Peak throughput: **41,000 pages/sec** (Intel SDM, parallel)
 
 Build with `zig build -Doptimize=ReleaseFast` for these results.
 
