@@ -15,10 +15,10 @@ A PDF text extraction library written in Zig.
 
 Tested on US Constitution PDF (85 pages, 3.8MB):
 
-| Tool | Time | Pages/sec | Speedup |
-|------|------|-----------|---------|
-| zpdf | 37 ms | 2,273 | **32x** |
-| MuPDF (mutool) | 1,211 ms | 70 | 1x |
+| Tool | Time | Pages/sec |
+|------|------|-----------|
+| zpdf | 58 ms | 1,466 |
+| MuPDF (mutool convert) | 68 ms | 1,250 |
 
 ## Requirements
 
