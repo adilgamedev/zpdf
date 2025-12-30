@@ -121,7 +121,7 @@ pub fn ContentInterpreter(comptime Writer: type) type {
 
         /// Process a content stream
         pub fn process(self: *Self, content: []const u8) !void {
-            var lexer = ContentLexer.init(content);
+            var lexer = ContentLexer.init(self.allocator, content);
             var operand_stack: [64]Operand = undefined;
             var stack_size: usize = 0;
 
@@ -503,11 +503,11 @@ pub const ContentLexer = struct {
         array: []const Operand,
     };
 
-    pub fn init(data: []const u8) ContentLexer {
+    pub fn init(allocator: std.mem.Allocator, data: []const u8) ContentLexer {
         return .{
             .data = data,
             .pos = 0,
-            .allocator = undefined,
+            .allocator = allocator,
         };
     }
 
@@ -576,27 +576,70 @@ pub const ContentLexer = struct {
 
     fn scanString(self: *ContentLexer) []const u8 {
         self.pos += 1; // Skip '('
-        const start = self.pos;
         var depth: usize = 1;
+
+        // Decode escape sequences into a new buffer
+        var result: std.ArrayList(u8) = .empty;
 
         while (self.pos < self.data.len and depth > 0) {
             const c = self.data[self.pos];
+
             if (c == '\\' and self.pos + 1 < self.data.len) {
-                self.pos += 2;
+                self.pos += 1;
+                const escaped = self.data[self.pos];
+                self.pos += 1;
+
+                const decoded: u8 = switch (escaped) {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    'b' => 0x08,
+                    'f' => 0x0C,
+                    '(' => '(',
+                    ')' => ')',
+                    '\\' => '\\',
+                    '\r' => {
+                        // Line continuation - skip \r and optional \n
+                        if (self.pos < self.data.len and self.data[self.pos] == '\n') {
+                            self.pos += 1;
+                        }
+                        continue;
+                    },
+                    '\n' => continue, // Line continuation
+                    '0'...'7' => blk: {
+                        // Octal escape (1-3 digits)
+                        var octal: u8 = escaped - '0';
+                        var count: usize = 1;
+                        while (count < 3 and self.pos < self.data.len) {
+                            const oc = self.data[self.pos];
+                            if (oc >= '0' and oc <= '7') {
+                                octal = octal *% 8 +% (oc - '0');
+                                self.pos += 1;
+                                count += 1;
+                            } else break;
+                        }
+                        break :blk octal;
+                    },
+                    else => escaped,
+                };
+                result.append(self.allocator, decoded) catch {};
             } else if (c == '(') {
                 depth += 1;
+                result.append(self.allocator, c) catch {};
                 self.pos += 1;
             } else if (c == ')') {
                 depth -= 1;
-                if (depth > 0) self.pos += 1;
+                if (depth > 0) {
+                    result.append(self.allocator, c) catch {};
+                }
+                self.pos += 1;
             } else {
+                result.append(self.allocator, c) catch {};
                 self.pos += 1;
             }
         }
 
-        const result = self.data[start..self.pos];
-        if (self.pos < self.data.len) self.pos += 1; // Skip ')'
-        return result;
+        return result.toOwnedSlice(self.allocator) catch &.{};
     }
 
     fn scanHexString(self: *ContentLexer) []const u8 {
@@ -720,7 +763,9 @@ fn isAlpha(c: u8) bool {
 test "lexer basic tokens" {
     const content = "BT /F1 12 Tf (Hello) Tj ET";
 
-    var lexer = ContentLexer.init(content);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var lexer = ContentLexer.init(arena.allocator(), content);
 
     // BT
     const t1 = (try lexer.next()).?;
@@ -758,7 +803,9 @@ test "lexer basic tokens" {
 test "lexer TJ array" {
     const content = "[(Hello ) -200 (World)] TJ";
 
-    var lexer = ContentLexer.init(content);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var lexer = ContentLexer.init(arena.allocator(), content);
 
     const arr = (try lexer.next()).?;
     try std.testing.expect(arr == .array);

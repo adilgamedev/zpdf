@@ -138,7 +138,9 @@ test "XRef parsing" {
 
 test "content lexer tokens" {
     const content = "BT /F1 12 Tf (Hello) Tj ET";
-    var lexer = zpdf.interpreter.ContentLexer.init(content);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var lexer = zpdf.interpreter.ContentLexer.init(arena.allocator(), content);
 
     // BT operator
     const t1 = (try lexer.next()).?;

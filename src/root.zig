@@ -291,7 +291,7 @@ pub const Document = struct {
         if (content.len == 0) return;
 
         // Simple text extraction using content lexer
-        try extractTextFromContent(content, page.resources, writer);
+        try extractTextFromContent(arena, content, page.resources, writer);
     }
 
     /// Extract text from all pages
@@ -388,7 +388,7 @@ pub const Document = struct {
                         &local_cache,
                     ) catch continue;
 
-                    extractTextFromContent(content, page.resources, fbs.writer()) catch continue;
+                    extractTextFromContent(thread_alloc, content, page.resources, fbs.writer()) catch continue;
 
                     if (fbs.pos > 0) {
                         c.results[page_num] = c.alloc.dupe(u8, buf[0..fbs.pos]) catch &[_]u8{};
@@ -468,10 +468,10 @@ pub const Document = struct {
 };
 
 /// Extract text from content stream (simplified version)
-fn extractTextFromContent(content: []const u8, resources: ?Object.Dict, writer: anytype) !void {
+fn extractTextFromContent(allocator: std.mem.Allocator, content: []const u8, resources: ?Object.Dict, writer: anytype) !void {
     _ = resources;
 
-    var lexer = interpreter.ContentLexer.init(content);
+    var lexer = interpreter.ContentLexer.init(allocator, content);
     var operands: [64]interpreter.Operand = undefined;
     var operand_count: usize = 0;
 
@@ -615,7 +615,7 @@ fn writeTJArray(operand: interpreter.Operand, writer: anytype) !void {
 fn extractTextFromContentWithBounds(content: []const u8, resources: ?Object.Dict, collector: *interpreter.SpanCollector) !void {
     _ = resources;
 
-    var lexer = interpreter.ContentLexer.init(content);
+    var lexer = interpreter.ContentLexer.init(collector.allocator, content);
     var operands: [64]interpreter.Operand = undefined;
     var operand_count: usize = 0;
 
