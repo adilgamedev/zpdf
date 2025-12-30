@@ -414,25 +414,38 @@ pub const Document = struct {
             if (t.*) |thread| thread.join();
         }
 
-        // Calculate total size and concatenate
+        // Calculate total size - only count separators between non-empty results
         var total_size: usize = 0;
-        for (results) |r| total_size += r.len + 1;
+        var non_empty_count: usize = 0;
+        for (results) |r| {
+            if (r.len > 0) {
+                total_size += r.len;
+                non_empty_count += 1;
+            }
+        }
+        if (non_empty_count > 1) {
+            total_size += non_empty_count - 1; // separators between non-empty results
+        }
+
+        if (total_size == 0) return allocator.alloc(u8, 0);
 
         var output = try allocator.alloc(u8, total_size);
         var pos: usize = 0;
-        for (results, 0..) |r, i| {
-            if (i > 0 and pos < output.len) {
-                output[pos] = '\x0c';
-                pos += 1;
-            }
+        var first_written = false;
+        for (results) |r| {
             if (r.len > 0) {
+                if (first_written) {
+                    output[pos] = '\x0c';
+                    pos += 1;
+                }
                 @memcpy(output[pos..][0..r.len], r);
                 pos += r.len;
                 allocator.free(r);
+                first_written = true;
             }
         }
 
-        return output[0..pos];
+        return output;
     }
 
     /// Get page metadata
