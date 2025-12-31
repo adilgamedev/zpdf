@@ -739,9 +739,17 @@ fn writeTJArrayWithBounds(operand: interpreter.Operand, collector: *interpreter.
         switch (item) {
             .string, .hex_string => try writeTextOperand(item, collector),
             .number => |n| {
-                if (n < -100) {
+                // TJ spacing: negative = move right (add space), positive = move left (kern)
+                // Units are 1/1000 of em (font size)
+                // Only flush and create new span for significant spacing (word gaps)
+                // Typical word space is ~250-330 units, kerning is ~10-100 units
+                if (n < -150) {
+                    // Significant space - flush current span
                     try collector.flush();
                 }
+                // Always apply position adjustment
+                const adjustment = -n / 1000.0 * collector.current_font_size;
+                collector.current_x += adjustment;
             },
             else => {},
         }
