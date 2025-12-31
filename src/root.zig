@@ -306,13 +306,9 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
                 const r: *const Resolver = @alignCast(@ptrCast(ctx));
                 return r.resolve(obj);
             }
-        }.wrapper, &resolver) catch |err| {
-            if (self.error_config.continue_on_encoding_error) {
-                continue;
-            } else {
-                std.debug.print("Error parsing font {s}: {}\n", .{ entry.key, err });
-                continue;
-            }
+        }.wrapper, &resolver) catch {
+            // Font parsing failed - skip this font
+            continue;
         };
 
         // Need to dupe key since bufPrint uses stack buffer
@@ -435,121 +431,11 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
     }
 
     /// Extract text from all pages in parallel (returns concatenated result)
-    pub fn extractAllTextParallel(self: *Document, allocator: std.mem.Allocator) ![]u8 {
-        const num_pages = self.pages.items.len;
-        if (num_pages == 0) return try allocator.alloc(u8, 0);
-
-        // Preload all fonts before spawning threads
-        for (0..num_pages) |i| {
-            self.ensurePageFonts(i);
-        }
-
-        // Allocate result buffers for each page
-        const results = try allocator.alloc([]u8, num_pages);
-        defer allocator.free(results);
-        @memset(results, &[_]u8{});
-
-        const Thread = std.Thread;
-        const cpu_count = Thread.getCpuCount() catch 4;
-        const num_threads: usize = @min(num_pages, @min(cpu_count, 8));
-
-        const Context = struct {
-            doc: *Document,
-            results: [][]u8,
-            alloc: std.mem.Allocator,
-        };
-
-        const ctx = Context{
-            .doc = self,
-            .results = results,
-            .alloc = allocator,
-        };
-
-        // Thread worker - each thread uses its own arena and cache
-        const worker = struct {
-            fn run(c: Context, start: usize, end: usize) void {
-                // Thread-local arena for all allocations
-                var arena = std.heap.ArenaAllocator.init(c.alloc);
-                defer arena.deinit();
-                const thread_alloc = arena.allocator();
-
-                // Thread-local object cache
-                var local_cache = std.AutoHashMap(u32, Object).init(thread_alloc);
-                defer local_cache.deinit();
-
-                for (start..end) |page_num| {
-                    // Extract directly to fixed buffer to avoid allocations
-                    var buf: [65536]u8 = undefined;
-                    var fbs = std.io.fixedBufferStream(&buf);
-
-                    const page = c.doc.pages.items[page_num];
-                    const content = pagetree.getPageContents(
-                        thread_alloc,
-                        c.doc.data,
-                        &c.doc.xref_table,
-                        page,
-                        &local_cache,
-                    ) catch continue;
-
-                    extractTextFromContent(thread_alloc, content, page_num, &c.doc.font_cache, fbs.writer()) catch continue;
-
-                    if (fbs.pos > 0) {
-                        c.results[page_num] = c.alloc.dupe(u8, buf[0..fbs.pos]) catch &[_]u8{};
-                    }
-                }
-            }
-        }.run;
-
-        // Spawn threads
-        var threads: [8]?Thread = [_]?Thread{null} ** 8;
-        const pages_per_thread = (num_pages + num_threads - 1) / num_threads;
-
-        for (0..num_threads) |i| {
-            const start = i * pages_per_thread;
-            const end = @min(start + pages_per_thread, num_pages);
-            if (start < end) {
-                threads[i] = Thread.spawn(.{}, worker, .{ ctx, start, end }) catch null;
-            }
-        }
-
-        // Wait for all threads
-        for (&threads) |*t| {
-            if (t.*) |thread| thread.join();
-        }
-
-        // Calculate total size - only count separators between non-empty results
-        var total_size: usize = 0;
-        var non_empty_count: usize = 0;
-        for (results) |r| {
-            if (r.len > 0) {
-                total_size += r.len;
-                non_empty_count += 1;
-            }
-        }
-        if (non_empty_count > 1) {
-            total_size += non_empty_count - 1; // separators between non-empty results
-        }
-
-        if (total_size == 0) return allocator.alloc(u8, 0);
-
-        var output = try allocator.alloc(u8, total_size);
-        var pos: usize = 0;
-        var first_written = false;
-        for (results) |r| {
-            if (r.len > 0) {
-                if (first_written) {
-                    output[pos] = '\x0c';
-                    pos += 1;
-                }
-                @memcpy(output[pos..][0..r.len], r);
-                pos += r.len;
-                allocator.free(r);
-                first_written = true;
-            }
-        }
-
-        return output;
-    }
+    /// Only available on non-WASM targets (use extractAllText on WASM)
+    pub const extractAllTextParallel = if (is_wasm)
+        @compileError("extractAllTextParallel is not available on WASM targets")
+    else
+        extractAllTextParallelImpl;
 
     /// Get page metadata
     pub fn getPageInfo(self: *const Document, page_num: usize) ?PageInfo {
@@ -894,6 +780,132 @@ pub fn extractTextFromMemory(allocator: std.mem.Allocator, data: []const u8) ![]
 
     return output.toOwnedSlice(allocator);
 }
+
+// ============================================================================
+// Parallel extraction (non-WASM only)
+// ============================================================================
+
+const extractAllTextParallelImpl = if (is_wasm) struct {
+    fn notAvailable(_: *Document, _: std.mem.Allocator) ![]u8 {
+        @compileError("extractAllTextParallel not available on WASM");
+    }
+}.notAvailable else struct {
+    fn impl(self: *Document, allocator: std.mem.Allocator) ![]u8 {
+        const num_pages = self.pages.items.len;
+        if (num_pages == 0) return try allocator.alloc(u8, 0);
+
+        // Preload all fonts before spawning threads
+        for (0..num_pages) |i| {
+            self.ensurePageFonts(i);
+        }
+
+        // Allocate result buffers for each page
+        const results = try allocator.alloc([]u8, num_pages);
+        defer allocator.free(results);
+        @memset(results, &[_]u8{});
+
+        const Thread = std.Thread;
+        const cpu_count = Thread.getCpuCount() catch 4;
+        const num_threads: usize = @min(num_pages, @min(cpu_count, 8));
+
+        const Context = struct {
+            doc: *Document,
+            results: [][]u8,
+            alloc: std.mem.Allocator,
+        };
+
+        const ctx = Context{
+            .doc = self,
+            .results = results,
+            .alloc = allocator,
+        };
+
+        // Thread worker - each thread uses its own arena and cache
+        const worker = struct {
+            fn run(c: Context, start: usize, end: usize) void {
+                // Thread-local arena for all allocations
+                var arena = std.heap.ArenaAllocator.init(c.alloc);
+                defer arena.deinit();
+                const thread_alloc = arena.allocator();
+
+                // Thread-local object cache
+                var local_cache = std.AutoHashMap(u32, Object).init(thread_alloc);
+                defer local_cache.deinit();
+
+                for (start..end) |page_num| {
+                    // Extract directly to fixed buffer to avoid allocations
+                    var buf: [65536]u8 = undefined;
+                    var fbs = std.io.fixedBufferStream(&buf);
+
+                    const page = c.doc.pages.items[page_num];
+                    const content = pagetree.getPageContents(
+                        thread_alloc,
+                        c.doc.data,
+                        &c.doc.xref_table,
+                        page,
+                        &local_cache,
+                    ) catch continue;
+
+                    extractTextFromContent(thread_alloc, content, page_num, &c.doc.font_cache, fbs.writer()) catch continue;
+
+                    if (fbs.pos > 0) {
+                        c.results[page_num] = c.alloc.dupe(u8, buf[0..fbs.pos]) catch &[_]u8{};
+                    }
+                }
+            }
+        }.run;
+
+        // Spawn threads
+        var threads: [8]?Thread = [_]?Thread{null} ** 8;
+        const pages_per_thread = (num_pages + num_threads - 1) / num_threads;
+
+        for (0..num_threads) |i| {
+            const start = i * pages_per_thread;
+            const end = @min(start + pages_per_thread, num_pages);
+            if (start < end) {
+                threads[i] = Thread.spawn(.{}, worker, .{ ctx, start, end }) catch null;
+            }
+        }
+
+        // Wait for all threads
+        for (&threads) |*t| {
+            if (t.*) |thread| thread.join();
+        }
+
+        // Calculate total size - only count separators between non-empty results
+        var total_size: usize = 0;
+        var non_empty_count: usize = 0;
+        for (results) |r| {
+            if (r.len > 0) {
+                total_size += r.len;
+                non_empty_count += 1;
+            }
+        }
+        if (non_empty_count > 1) {
+            total_size += non_empty_count - 1; // separators between non-empty results
+        }
+
+        if (total_size == 0) return allocator.alloc(u8, 0);
+
+        var output = try allocator.alloc(u8, total_size);
+        var pos: usize = 0;
+        var first_written = false;
+        for (results) |r| {
+            if (r.len > 0) {
+                if (first_written) {
+                    output[pos] = '\x0c';
+                    pos += 1;
+                }
+                @memcpy(output[pos..][0..r.len], r);
+                pos += r.len;
+                allocator.free(r);
+                first_written = true;
+            }
+        }
+
+        return output;
+    }
+}.impl;
 
 // ============================================================================
 // TESTS
