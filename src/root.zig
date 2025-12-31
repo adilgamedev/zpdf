@@ -282,11 +282,12 @@ pub const Document = struct {
                 enc.bytes_per_char = 2;
             }
 
-            // Only parse ToUnicode if directly embedded (skip slow reference resolution)
+            // Parse ToUnicode CMap (only if embedded, skip slow reference resolution)
             if (fd.get("ToUnicode")) |tounicode| {
                 if (tounicode == .stream) {
                     encoding.parseToUnicodeCMap(arena, tounicode.stream, &enc) catch {};
                 }
+                // TODO: resolve ToUnicode references - needs object stream caching
             }
 
             // Need to dupe key since bufPrint uses stack buffer
