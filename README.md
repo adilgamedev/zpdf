@@ -49,8 +49,7 @@ Batch processing benchmark on [veraPDF test corpus](https://github.com/veraPDF/v
 
 | Tool | Time | PDFs/sec | Speedup |
 |------|------|----------|---------|
-| zpdf (stream) | 6.7s | 436 | 5.1x |
-| zpdf (tagged) | **6.0s** | **487** | **5.7x** |
+| zpdf | **6.0s** | **487** | **5.7x** |
 | MuPDF | 34.0s | 85 | 1x |
 
 ## Requirements
@@ -92,11 +91,9 @@ pub fn main() !void {
 ### CLI
 
 ```bash
-zpdf extract document.pdf              # Extract all pages (uses structure tree by default)
+zpdf extract document.pdf              # Extract all pages (uses structure tree for reading order)
 zpdf extract -p 1-10 document.pdf      # Extract pages 1-10
 zpdf extract -o out.txt document.pdf   # Output to file
-zpdf extract --stream-order doc.pdf    # Use raw content stream order (faster)
-zpdf extract --reading-order doc.pdf   # Use visual reading order (experimental)
 zpdf info document.pdf                 # Show document info
 zpdf bench document.pdf                # Run benchmark
 ```
