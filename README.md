@@ -15,33 +15,20 @@ A PDF text extraction library written in Zig.
 
 ## Benchmark
 
-Text extraction performance on Apple M4 Pro:
+Text extraction performance on Apple M4 Pro (reading order):
 
-| Document | Pages | zpdf | pdfium | MuPDF |
-|----------|------:|-----:|-------:|------:|
-| [Intel SDM](https://cdrdv2.intel.com/v1/dl/getContent/671200) | 5,252 | **227ms** | 3,632ms | 2,331ms |
-| [Pandas Docs](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | **762ms** | 2,379ms | 1,237ms |
-| [C++ Standard](https://open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf) | 2,134 | **671ms** | 1,964ms | 1,079ms |
-| Acrobat Reference | 651 | **120ms** | - | - |
-| US Constitution | 85 | **24ms** | 63ms | 58ms |
+| Document | Pages | zpdf | MuPDF | Speedup |
+|----------|------:|-----:|------:|--------:|
+| [Intel SDM](https://cdrdv2.intel.com/v1/dl/getContent/671200) | 5,252 | **623ms** | 2,132ms | 3.4x |
+| [Pandas Docs](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | **1,064ms** | 1,131ms | 1.1x |
+| [C++ Standard](https://open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf) | 2,134 | **898ms** | 989ms | 1.1x |
+| [Acrobat Reference](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf) | 651 | **199ms** | 510ms | 2.6x |
 
 *Lower is better. Build with `zig build -Doptimize=ReleaseFast`.*
 
-Peak throughput: **23,137 pages/sec** (Intel SDM)
-
-### Accuracy
-
-Character accuracy vs MuPDF reference (stream order extraction):
-
-| Tool | Char Accuracy | WER |
-|------|---------------|-----|
-| zpdf | 99.6-99.9% | 1-3% |
-| pdfium | 99.2-100% | 0-4% |
-| MuPDF | 100% (ref) | 0% |
+Peak throughput: **8,426 pages/sec** (Intel SDM)
 
 Build with `zig build -Doptimize=ReleaseFast` for best performance.
-
-Run `PYTHONPATH=python python benchmark/accuracy.py` to reproduce (requires `pypdfium2`).
 
 ### veraPDF Corpus (2,907 PDFs)
 
