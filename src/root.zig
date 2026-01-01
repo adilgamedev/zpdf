@@ -119,6 +119,9 @@ pub const Document = struct {
     /// Pre-resolved font encodings (key: "pageNum:fontName")
     font_cache: std.StringHashMap(encoding.FontEncoding),
 
+    /// Font encoding cache by object ID (avoids re-parsing same font object)
+    font_obj_cache: std.AutoHashMap(u32, encoding.FontEncoding),
+
     /// Cached structure tree reading order (parsed lazily)
     /// Key: page index, Value: list of MCIDs in reading order
     cached_reading_order: ?std.AutoHashMap(usize, std.ArrayList(structtree.MarkedContentRef)) = null,
@@ -174,6 +177,7 @@ pub const Document = struct {
             .error_config = config,
             .errors = .empty,
             .font_cache = std.StringHashMap(encoding.FontEncoding).init(allocator),
+            .font_obj_cache = std.AutoHashMap(u32, encoding.FontEncoding).init(allocator),
         };
 
         try doc.parseDocument();
@@ -196,6 +200,7 @@ pub const Document = struct {
             .error_config = config,
             .errors = .empty,
             .font_cache = std.StringHashMap(encoding.FontEncoding).init(allocator),
+            .font_obj_cache = std.AutoHashMap(u32, encoding.FontEncoding).init(allocator),
         };
 
         try doc.parseDocument();
@@ -252,75 +257,96 @@ pub const Document = struct {
     }
 
     /// Lazy-load fonts for a specific page (called on first extraction)
-fn ensurePageFonts(self: *Document, page_idx: usize) void {
-    const arena = self.parsing_arena.allocator();
-    const page = self.pages.items[page_idx];
-    if (page.resources == null) return;
-    const resources = page.resources.?;
-    const fonts_dict_obj = resources.get("Font") orelse return;
+    fn ensurePageFonts(self: *Document, page_idx: usize) void {
+        const arena = self.parsing_arena.allocator();
+        const page = self.pages.items[page_idx];
+        if (page.resources == null) return;
+        const resources = page.resources.?;
+        const fonts_dict_obj = resources.get("Font") orelse return;
 
-    const fonts_dict_resolved = switch (fonts_dict_obj) {
-        .reference => |ref| pagetree.resolveRef(arena, self.data, &self.xref_table, ref, &self.object_cache) catch null,
-        else => fonts_dict_obj,
-    };
-
-    if (fonts_dict_resolved == null or fonts_dict_resolved.? != .dict) return;
-
-    const fonts_dict = fonts_dict_resolved.?.dict;
-
-    for (fonts_dict.entries) |entry| {
-        // Create cache key
-        var key_buf: [64]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{d}:{s}", .{ page_idx, entry.key }) catch continue;
-
-        // Skip if already cached
-        if (self.font_cache.contains(key)) continue;
-
-        // Resolve font dictionary
-        const font_obj = switch (entry.value) {
-            .reference => |ref| pagetree.resolveRef(arena, self.data, &self.xref_table, ref, &self.object_cache) catch continue,
-            .dict => entry.value,
-            else => continue,
+        const fonts_dict_resolved = switch (fonts_dict_obj) {
+            .reference => |ref| pagetree.resolveRef(arena, self.data, &self.xref_table, ref, &self.object_cache) catch null,
+            else => fonts_dict_obj,
         };
 
-        const fd = switch (font_obj) {
-            .dict => |d| d,
-            else => continue,
-        };
+        if (fonts_dict_resolved == null or fonts_dict_resolved.? != .dict) return;
 
-        const Resolver = struct {
-            arena: std.mem.Allocator,
-            data: []const u8,
-            xref_table: *const xref.XRefTable,
-            object_cache: *std.AutoHashMap(u32, parser.Object),
+        const fonts_dict = fonts_dict_resolved.?.dict;
 
-            fn resolve(self_resolver: @This(), obj: parser.Object) parser.Object {
-                return switch (obj) {
-                    .reference => |ref| pagetree.resolveRef(self_resolver.arena, self_resolver.data, self_resolver.xref_table, ref, self_resolver.object_cache) catch obj,
-                    else => obj,
-                };
+        for (fonts_dict.entries) |entry| {
+            // Create cache key for page:name lookup
+            var key_buf: [64]u8 = undefined;
+            const key = std.fmt.bufPrint(&key_buf, "{d}:{s}", .{ page_idx, entry.key }) catch continue;
+
+            // Skip if already cached for this page
+            if (self.font_cache.contains(key)) continue;
+
+            // Check if font value is a reference - we can reuse by object ID
+            const font_obj_id: ?u32 = switch (entry.value) {
+                .reference => |ref| ref.num,
+                else => null,
+            };
+
+            // If we've already parsed this object ID, reuse the encoding
+            if (font_obj_id) |obj_id| {
+                if (self.font_obj_cache.get(obj_id)) |cached_enc| {
+                    // Reuse existing encoding - just add new key mapping
+                    const owned_key = arena.dupe(u8, key) catch continue;
+                    self.font_cache.put(owned_key, cached_enc) catch {};
+                    continue;
+                }
             }
-        };
-        const resolver = Resolver{
-            .arena = arena,
-            .data = self.data,
-            .xref_table = &self.xref_table,
-            .object_cache = &self.object_cache,
-        };
 
-        // Use the comprehensive parseFontEncoding
-        const enc = encoding.parseFontEncoding(arena, fd, struct {
-            fn wrapper(ctx: *const anyopaque, obj: parser.Object) parser.Object {
-                const r: *const Resolver = @alignCast(@ptrCast(ctx));
-                return r.resolve(obj);
+            // Resolve font dictionary
+            const font_obj = switch (entry.value) {
+                .reference => |ref| pagetree.resolveRef(arena, self.data, &self.xref_table, ref, &self.object_cache) catch continue,
+                .dict => entry.value,
+                else => continue,
+            };
+
+            const fd = switch (font_obj) {
+                .dict => |d| d,
+                else => continue,
+            };
+
+            const Resolver = struct {
+                arena: std.mem.Allocator,
+                data: []const u8,
+                xref_table: *const xref.XRefTable,
+                object_cache: *std.AutoHashMap(u32, parser.Object),
+
+                fn resolve(self_resolver: @This(), obj: parser.Object) parser.Object {
+                    return switch (obj) {
+                        .reference => |ref| pagetree.resolveRef(self_resolver.arena, self_resolver.data, self_resolver.xref_table, ref, self_resolver.object_cache) catch obj,
+                        else => obj,
+                    };
+                }
+            };
+            const resolver = Resolver{
+                .arena = arena,
+                .data = self.data,
+                .xref_table = &self.xref_table,
+                .object_cache = &self.object_cache,
+            };
+
+            // Use the comprehensive parseFontEncoding
+            const enc = encoding.parseFontEncoding(arena, fd, struct {
+                fn wrapper(ctx: *const anyopaque, obj: parser.Object) parser.Object {
+                    const r: *const Resolver = @alignCast(@ptrCast(ctx));
+                    return r.resolve(obj);
+                }
+            }.wrapper, &resolver) catch continue;
+
+            // Need to dupe key since bufPrint uses stack buffer
+            const owned_key = arena.dupe(u8, key) catch continue;
+            self.font_cache.put(owned_key, enc) catch {};
+
+            // Cache by object ID for reuse across pages
+            if (font_obj_id) |obj_id| {
+                self.font_obj_cache.put(obj_id, enc) catch {};
             }
-        }.wrapper, &resolver) catch continue;
-
-        // Need to dupe key since bufPrint uses stack buffer
-        const owned_key = arena.dupe(u8, key) catch continue;
-        self.font_cache.put(owned_key, enc) catch {};
+        }
     }
-}
 
     /// Close the document and free resources
     pub fn close(self: *Document) void {
@@ -346,6 +372,7 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
         self.errors.deinit(self.allocator);
         self.pages.deinit(self.allocator);
         self.font_cache.deinit();
+        self.font_obj_cache.deinit();
 
         self.allocator.destroy(self);
     }

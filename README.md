@@ -19,27 +19,12 @@ Text extraction performance on Apple M4 Pro (reading order):
 
 | Document | Pages | zpdf | MuPDF | Speedup |
 |----------|------:|-----:|------:|--------:|
-| [Intel SDM](https://cdrdv2.intel.com/v1/dl/getContent/671200) | 5,252 | **568ms** | 2,171ms | 3.8x |
-| [Pandas Docs](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | **558ms** | 1,147ms | 2.1x |
-| [C++ Standard](https://open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf) | 2,134 | **349ms** | 1,001ms | 2.9x |
-| [PDF Reference 1.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf) | 1,310 | **332ms** | 1,445ms | 4.4x |
+| [Intel SDM](https://cdrdv2.intel.com/v1/dl/getContent/671200) | 5,252 | **582ms** | 2,152ms | 3.7x |
+| [Pandas Docs](https://pandas.pydata.org/pandas-docs/version/1.4/pandas.pdf) | 3,743 | **640ms** | 1,130ms | 1.8x |
+| [C++ Standard](https://open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf) | 2,134 | **438ms** | 1,007ms | 2.3x |
+| [PDF Reference 1.7](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf) | 1,310 | **236ms** | 1,481ms | 6.3x |
 
-*Lower is better. Build with `zig build -Doptimize=ReleaseFast`.*
-
-Peak throughput: **9,242 pages/sec** (Intel SDM)
-
-Build with `zig build -Doptimize=ReleaseFast` for best performance.
-
-### veraPDF Corpus (2,907 PDFs)
-
-Batch processing benchmark on [veraPDF test corpus](https://github.com/veraPDF/veraPDF-corpus):
-
-| Tool | Time | PDFs/sec | Speedup |
-|------|------|----------|---------|
-| zpdf | **0.5s** | **6,013** | **4.7x** |
-| PyMuPDF | 2.3s | 1,274 | 1x |
-
-**Accuracy** (vs PyMuPDF): 95.8% average similarity, 91.2% exact match
+*Build with `zig build -Doptimize=ReleaseFast` for best performance.*
 
 ## Requirements
 

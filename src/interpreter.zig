@@ -579,8 +579,10 @@ pub const ContentLexer = struct {
         self.pos += 1; // Skip '('
         var depth: usize = 1;
 
-        // Decode escape sequences into a new buffer
-        var result: std.ArrayList(u8) = .empty;
+        // Use stack buffer for most strings (avoids heap allocations)
+        var stack_buf: [4096]u8 = undefined;
+        var stack_len: usize = 0;
+        var overflow: ?std.ArrayList(u8) = null;
 
         while (self.pos < self.data.len and depth > 0) {
             const c = self.data[self.pos];
@@ -623,31 +625,59 @@ pub const ContentLexer = struct {
                     },
                     else => escaped,
                 };
-                result.append(self.allocator, decoded) catch {};
+                appendByte(&stack_buf, &stack_len, &overflow, self.allocator, decoded);
             } else if (c == '(') {
                 depth += 1;
-                result.append(self.allocator, c) catch {};
+                appendByte(&stack_buf, &stack_len, &overflow, self.allocator, c);
                 self.pos += 1;
             } else if (c == ')') {
                 depth -= 1;
                 if (depth > 0) {
-                    result.append(self.allocator, c) catch {};
+                    appendByte(&stack_buf, &stack_len, &overflow, self.allocator, c);
                 }
                 self.pos += 1;
             } else {
-                result.append(self.allocator, c) catch {};
+                appendByte(&stack_buf, &stack_len, &overflow, self.allocator, c);
                 self.pos += 1;
             }
         }
 
-        return result.toOwnedSlice(self.allocator) catch &.{};
+        return finalizeBuf(&stack_buf, stack_len, &overflow, self.allocator);
+    }
+
+    fn appendByte(stack_buf: *[4096]u8, stack_len: *usize, overflow: *?std.ArrayList(u8), allocator: std.mem.Allocator, byte: u8) void {
+        if (overflow.*) |*list| {
+            list.append(allocator, byte) catch {};
+        } else if (stack_len.* < stack_buf.len) {
+            stack_buf[stack_len.*] = byte;
+            stack_len.* += 1;
+        } else {
+            // Overflow to heap - copy existing stack data first
+            var list: std.ArrayList(u8) = .empty;
+            list.appendSlice(allocator, stack_buf[0..stack_len.*]) catch {};
+            list.append(allocator, byte) catch {};
+            overflow.* = list;
+        }
+    }
+
+    fn finalizeBuf(stack_buf: *[4096]u8, stack_len: usize, overflow: *?std.ArrayList(u8), allocator: std.mem.Allocator) []const u8 {
+        if (overflow.*) |*list| {
+            return list.toOwnedSlice(allocator) catch &.{};
+        }
+        if (stack_len == 0) return &.{};
+        // Single allocation + copy
+        const result = allocator.alloc(u8, stack_len) catch return &.{};
+        @memcpy(result, stack_buf[0..stack_len]);
+        return result;
     }
 
     fn scanHexString(self: *ContentLexer) []const u8 {
         self.pos += 1; // Skip '<'
 
-        // Decode hex string to bytes
-        var result: std.ArrayList(u8) = .empty;
+        // Use stack buffer for most hex strings (avoids heap allocations)
+        var stack_buf: [4096]u8 = undefined;
+        var stack_len: usize = 0;
+        var overflow: ?std.ArrayList(u8) = null;
 
         var high_nibble: ?u8 = null;
 
@@ -668,7 +698,7 @@ pub const ContentLexer = struct {
                 continue;
 
             if (high_nibble) |high| {
-                result.append(self.allocator, (high << 4) | nibble) catch {};
+                appendByte(&stack_buf, &stack_len, &overflow, self.allocator, (high << 4) | nibble);
                 high_nibble = null;
             } else {
                 high_nibble = nibble;
@@ -677,11 +707,11 @@ pub const ContentLexer = struct {
 
         // Handle odd number of hex digits (pad with 0)
         if (high_nibble) |high| {
-            result.append(self.allocator, high << 4) catch {};
+            appendByte(&stack_buf, &stack_len, &overflow, self.allocator, high << 4);
         }
 
         if (self.pos < self.data.len) self.pos += 1; // Skip '>'
-        return result.toOwnedSlice(self.allocator) catch return &.{};
+        return finalizeBuf(&stack_buf, stack_len, &overflow, self.allocator);
     }
 
     fn scanName(self: *ContentLexer) []const u8 {

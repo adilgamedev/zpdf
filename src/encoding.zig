@@ -369,12 +369,7 @@ pub const FontEncoding = struct {
 
     fn codeInRanges(self: *const FontEncoding, code: u32) bool {
         if (self.cmap_hash.contains(code)) return true;
-        for (self.cmap_ranges) |range| {
-            if (code >= range.src_start and code <= range.src_end) {
-                return true;
-            }
-        }
-        return false;
+        return self.binarySearchRange(code) != null;
     }
 
     fn lookupCMap(self: *const FontEncoding, code: u32) ?u32 {
@@ -382,10 +377,36 @@ pub const FontEncoding = struct {
         if (self.cmap_hash.get(code)) |dst| {
             return dst;
         }
-        // Fall back to range search (for bfrange entries)
-        for (self.cmap_ranges) |range| {
-            if (range.is_range and code >= range.src_start and code <= range.src_end) {
-                return range.dst_start + (code - range.src_start);
+        // Binary search through sorted ranges (for bfrange entries)
+        if (self.binarySearchRange(code)) |range| {
+            return range.dst_start + (code - range.src_start);
+        }
+        return null;
+    }
+
+    /// Binary search for a range containing the given code.
+    /// Ranges must be sorted by src_start (done during parsing).
+    fn binarySearchRange(self: *const FontEncoding, code: u32) ?CMapRange {
+        const ranges = self.cmap_ranges;
+        if (ranges.len == 0) return null;
+
+        var left: usize = 0;
+        var right: usize = ranges.len;
+
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const range = ranges[mid];
+
+            if (code < range.src_start) {
+                right = mid;
+            } else if (code > range.src_end) {
+                left = mid + 1;
+            } else {
+                // code is within this range
+                if (range.is_range) {
+                    return range;
+                }
+                return null;
             }
         }
         return null;
@@ -889,7 +910,15 @@ pub fn parseToUnicodeCMap(allocator: std.mem.Allocator, stream: Object.Stream, e
         }
     }
 
-    encoding.cmap_ranges = try ranges.toOwnedSlice(allocator);
+    // Sort ranges by src_start for binary search
+    const owned_ranges = try ranges.toOwnedSlice(allocator);
+    std.mem.sort(FontEncoding.CMapRange, owned_ranges, {}, struct {
+        fn lessThan(_: void, a: FontEncoding.CMapRange, b: FontEncoding.CMapRange) bool {
+            return a.src_start < b.src_start;
+        }
+    }.lessThan);
+    encoding.cmap_ranges = owned_ranges;
+
     if (encoding.cmap_ranges.len > 0 or encoding.cmap_hash.count() > 0) {
         encoding.is_cid = true;
     }
