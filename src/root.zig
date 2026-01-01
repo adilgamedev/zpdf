@@ -119,6 +119,11 @@ pub const Document = struct {
     /// Pre-resolved font encodings (key: "pageNum:fontName")
     font_cache: std.StringHashMap(encoding.FontEncoding),
 
+    /// Cached structure tree reading order (parsed lazily)
+    /// Key: page index, Value: list of MCIDs in reading order
+    cached_reading_order: ?std.AutoHashMap(usize, std.ArrayList(structtree.MarkedContentRef)) = null,
+    reading_order_parsed: bool = false,
+
     /// Open a PDF file (not available on WASM)
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !*Document {
         return openWithConfig(allocator, path, ErrorConfig.default());
@@ -324,6 +329,15 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
             std.posix.munmap(aligned_ptr[0..self.data.len]);
         }
 
+        // Free cached reading order
+        if (self.cached_reading_order) |*cache| {
+            var it = cache.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.deinit(self.allocator);
+            }
+            cache.deinit();
+        }
+
         // Free the arena which contains all parsed objects
         self.parsing_arena.deinit();
 
@@ -453,10 +467,53 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
         return catalog_dict.get("StructTreeRoot") != null;
     }
 
+    /// Ensure reading order is parsed and cached (called once per document)
+    fn ensureReadingOrder(self: *Document) void {
+        if (self.reading_order_parsed) return;
+        self.reading_order_parsed = true;
+
+        const arena = self.parsing_arena.allocator();
+
+        // Parse structure tree once
+        var tree = structtree.parseStructTree(arena, self.data, &self.xref_table, &self.object_cache) catch return;
+        defer tree.deinit();
+
+        if (tree.root == null) return;
+
+        // Build page index mapping (object number -> page index)
+        var page_obj_to_idx = std.AutoHashMap(u32, usize).init(arena);
+        for (self.pages.items, 0..) |p, idx| {
+            page_obj_to_idx.put(p.ref.num, idx) catch continue;
+        }
+
+        // Get reading order for all pages
+        var reading_order = tree.getReadingOrder(arena) catch return;
+
+        // Build per-page reading order cache
+        self.cached_reading_order = std.AutoHashMap(usize, std.ArrayList(structtree.MarkedContentRef)).init(self.allocator);
+
+        var it = reading_order.iterator();
+        while (it.next()) |entry| {
+            const obj_num = entry.key_ptr.*;
+            if (page_obj_to_idx.get(@intCast(obj_num))) |page_idx| {
+                var page_mcids = self.cached_reading_order.?.getPtr(page_idx) orelse blk: {
+                    self.cached_reading_order.?.put(page_idx, .empty) catch continue;
+                    break :blk self.cached_reading_order.?.getPtr(page_idx).?;
+                };
+                for (entry.value_ptr.items) |mcr| {
+                    page_mcids.append(self.allocator, mcr) catch continue;
+                }
+            }
+        }
+    }
+
     /// Extract text using structure tree reading order (for tagged PDFs)
-    /// Falls back to stream order if no structure tree is present
+    /// Falls back to geometric sorting if no structure tree is present
     pub fn extractTextStructured(self: *Document, page_num: usize, allocator: std.mem.Allocator) ![]u8 {
         if (page_num >= self.pages.items.len) return error.PageNotFound;
+
+        // Ensure reading order is cached (done once per document)
+        self.ensureReadingOrder();
 
         const arena = self.parsing_arena.allocator();
         const page = self.pages.items[page_num];
@@ -475,71 +532,38 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
         // Lazy-load fonts for this page
         self.ensurePageFonts(page_num);
 
-        // Extract text with MCID tracking
-        var extractor = structtree.MarkedContentExtractor.init(allocator);
-        defer extractor.deinit();
+        // Check if we have cached reading order for this page
+        if (self.cached_reading_order) |*cache| {
+            if (cache.get(page_num)) |mcids| {
+                // Extract text with MCID tracking
+                var extractor = structtree.MarkedContentExtractor.init(allocator);
+                defer extractor.deinit();
 
-        try extractTextWithMcidTracking(arena, content, page_num, &self.font_cache, &extractor);
+                extractTextWithMcidTracking(arena, content, page_num, &self.font_cache, &extractor) catch
+                    return self.extractTextGeometric(page_num, allocator);
 
-        // Parse structure tree to get reading order
-        var tree = structtree.parseStructTree(arena, self.data, &self.xref_table, &self.object_cache) catch
-            return self.extractTextGeometric(page_num, allocator);
+                // Collect text in structure tree order
+                var result: std.ArrayList(u8) = .empty;
+                errdefer result.deinit(allocator);
 
-        defer tree.deinit();
-
-        if (tree.root == null) {
-            // No structure tree, fall back to geometric sorting
-            return self.extractTextGeometric(page_num, allocator);
-        }
-
-        // Build page index mapping (object number -> page index)
-        var page_obj_to_idx = std.AutoHashMap(u32, usize).init(allocator);
-        defer page_obj_to_idx.deinit();
-
-        for (self.pages.items, 0..) |p, idx| {
-            try page_obj_to_idx.put(p.ref.num, idx);
-        }
-
-        // Get reading order for this page
-        var reading_order = try tree.getReadingOrder(allocator);
-        defer {
-            var it = reading_order.iterator();
-            while (it.next()) |entry| {
-                entry.value_ptr.deinit(allocator);
-            }
-            reading_order.deinit();
-        }
-
-        // Collect text in structure tree order
-        var result: std.ArrayList(u8) = .empty;
-        errdefer result.deinit(allocator);
-
-        // Find MCIDs for this page by checking object numbers
-        var it = reading_order.iterator();
-        while (it.next()) |entry| {
-            // Check if this object number matches our page
-            const obj_num = entry.key_ptr.*;
-            if (page_obj_to_idx.get(@intCast(obj_num))) |idx| {
-                if (idx == page_num) {
-                    for (entry.value_ptr.items) |mcr| {
-                        if (extractor.getTextForMcid(mcr.mcid)) |text| {
-                            if (result.items.len > 0 and text.len > 0) {
-                                try result.append(allocator, ' ');
-                            }
-                            try result.appendSlice(allocator, text);
+                for (mcids.items) |mcr| {
+                    if (extractor.getTextForMcid(mcr.mcid)) |text| {
+                        if (result.items.len > 0 and text.len > 0) {
+                            try result.append(allocator, ' ');
                         }
+                        try result.appendSlice(allocator, text);
                     }
                 }
+
+                if (result.items.len > 0) {
+                    return result.toOwnedSlice(allocator);
+                }
+                result.deinit(allocator);
             }
         }
 
-        // If we got no content from structure tree, fall back to geometric sorting
-        if (result.items.len == 0) {
-            result.deinit(allocator);
-            return self.extractTextGeometric(page_num, allocator);
-        }
-
-        return result.toOwnedSlice(allocator);
+        // Fall back to geometric sorting
+        return self.extractTextGeometric(page_num, allocator);
     }
 
     /// Extract text using geometric sorting (fallback when no structure tree)
