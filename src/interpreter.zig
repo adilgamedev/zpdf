@@ -15,6 +15,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const encoding_mod = @import("encoding.zig");
 const decompress = @import("decompress.zig");
+const simd = @import("simd.zig");
 pub const layout = @import("layout.zig");
 
 pub const TextSpan = layout.TextSpan;
@@ -697,25 +698,21 @@ pub const ContentLexer = struct {
     }
 
     fn scanNumber(self: *ContentLexer) f64 {
-        const start = self.pos;
-        var has_dot = false;
-
-        if (self.data[self.pos] == '-' or self.data[self.pos] == '+') {
-            self.pos += 1;
+        // Use fast SIMD-optimized float parsing
+        if (simd.parseFloat(self.data[self.pos..])) |result| {
+            self.pos += result.consumed;
+            return result.value;
         }
-
+        // Fallback for edge cases
+        const start = self.pos;
         while (self.pos < self.data.len) {
             const c = self.data[self.pos];
-            if (c >= '0' and c <= '9') {
-                self.pos += 1;
-            } else if (c == '.' and !has_dot) {
-                has_dot = true;
+            if ((c >= '0' and c <= '9') or c == '.' or c == '-' or c == '+') {
                 self.pos += 1;
             } else {
                 break;
             }
         }
-
         return std.fmt.parseFloat(f64, self.data[start..self.pos]) catch 0;
     }
 
