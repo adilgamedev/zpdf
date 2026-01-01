@@ -43,6 +43,16 @@ Build with `zig build -Doptimize=ReleaseFast` for best performance.
 
 Run `PYTHONPATH=python python benchmark/accuracy.py` to reproduce (requires `pypdfium2`).
 
+### veraPDF Corpus (2,907 PDFs)
+
+Batch processing benchmark on [veraPDF test corpus](https://github.com/veraPDF/veraPDF-corpus):
+
+| Tool | Time | PDFs/sec | Speedup |
+|------|------|----------|---------|
+| zpdf (stream) | 6.5s | 448 | **5.2x** |
+| zpdf (tagged) | 5.9s | 490 | **5.7x** |
+| MuPDF | 33.9s | 86 | 1x |
+
 ## Requirements
 
 - Zig 0.15.2 or later
