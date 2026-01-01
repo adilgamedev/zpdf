@@ -24,6 +24,7 @@ pub const decompress = @import("decompress.zig");
 pub const simd = @import("simd.zig");
 pub const layout = @import("layout.zig");
 pub const structtree = @import("structtree.zig");
+pub const markdown = @import("markdown.zig");
 
 // Re-exports
 pub const Object = parser.Object;
@@ -35,6 +36,8 @@ pub const TextSpan = layout.TextSpan;
 pub const LayoutResult = layout.LayoutResult;
 pub const StructTree = structtree.StructTree;
 pub const StructElement = structtree.StructElement;
+pub const MarkdownOptions = markdown.MarkdownOptions;
+pub const MarkdownRenderer = markdown.MarkdownRenderer;
 
 /// Error handling configuration
 pub const ErrorConfig = struct {
@@ -740,6 +743,70 @@ pub const Document = struct {
             if (!used_structure) {
                 try extractTextFromContent(arena, content, page_num, &self.font_cache, result.writer(allocator));
             }
+        }
+
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// Extract text from a page as Markdown
+    pub fn extractMarkdown(self: *Document, page_num: usize, allocator: std.mem.Allocator) ![]u8 {
+        return self.extractMarkdownWithOptions(page_num, allocator, markdown.MarkdownOptions{});
+    }
+
+    /// Extract text from a page as Markdown with custom options
+    pub fn extractMarkdownWithOptions(
+        self: *Document,
+        page_num: usize,
+        allocator: std.mem.Allocator,
+        options: markdown.MarkdownOptions,
+    ) ![]u8 {
+        if (page_num >= self.pages.items.len) return error.PageNotFound;
+
+        const page = self.pages.items[page_num];
+        const page_width = page.media_box[2] - page.media_box[0];
+
+        // Extract spans with bounds
+        const spans = try self.extractTextWithBounds(page_num, allocator);
+        if (spans.len == 0) {
+            allocator.free(spans);
+            return allocator.alloc(u8, 0);
+        }
+        defer allocator.free(spans);
+
+        // Render to Markdown
+        var renderer = markdown.MarkdownRenderer.init(allocator, options);
+        return renderer.render(spans, page_width);
+    }
+
+    /// Extract text from all pages as Markdown
+    pub fn extractAllMarkdown(self: *Document, allocator: std.mem.Allocator) ![]u8 {
+        return self.extractAllMarkdownWithOptions(allocator, markdown.MarkdownOptions{});
+    }
+
+    /// Extract text from all pages as Markdown with custom options
+    pub fn extractAllMarkdownWithOptions(
+        self: *Document,
+        allocator: std.mem.Allocator,
+        options: markdown.MarkdownOptions,
+    ) ![]u8 {
+        const num_pages = self.pages.items.len;
+        if (num_pages == 0) return allocator.alloc(u8, 0);
+
+        var result: std.ArrayList(u8) = .empty;
+        errdefer result.deinit(allocator);
+
+        // Pre-size: ~3KB average per page for markdown
+        try result.ensureTotalCapacity(allocator, num_pages * 3072);
+
+        for (0..num_pages) |page_num| {
+            if (page_num > 0 and options.page_breaks_as_hr) {
+                try result.appendSlice(allocator, "\n---\n\n");
+            }
+
+            const page_md = self.extractMarkdownWithOptions(page_num, allocator, options) catch continue;
+            defer allocator.free(page_md);
+
+            try result.appendSlice(allocator, page_md);
         }
 
         return result.toOwnedSlice(allocator);

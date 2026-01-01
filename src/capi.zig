@@ -173,3 +173,27 @@ export fn zpdf_extract_all_reading_order(handle: ?*ZpdfDocument, out_len: *usize
 export fn zpdf_extract_all_reading_order_parallel(handle: ?*ZpdfDocument, out_len: *usize) ?[*]u8 {
     return zpdf_extract_all_reading_order(handle, out_len);
 }
+
+/// Extract text from a single page as Markdown
+export fn zpdf_extract_page_markdown(handle: ?*ZpdfDocument, page_num: c_int, out_len: *usize) ?[*]u8 {
+    if (handle) |h| {
+        const doc: *zpdf.Document = @ptrCast(@alignCast(h));
+        if (page_num < 0 or @as(usize, @intCast(page_num)) >= doc.pages.items.len) return null;
+
+        const result = doc.extractMarkdown(@intCast(page_num), c_allocator) catch return null;
+        out_len.* = result.len;
+        return result.ptr;
+    }
+    return null;
+}
+
+/// Extract text from all pages as Markdown
+export fn zpdf_extract_all_markdown(handle: ?*ZpdfDocument, out_len: *usize) ?[*]u8 {
+    if (handle) |h| {
+        const doc: *zpdf.Document = @ptrCast(@alignCast(h));
+        const result = doc.extractAllMarkdown(c_allocator) catch return null;
+        out_len.* = result.len;
+        return result.ptr;
+    }
+    return null;
+}

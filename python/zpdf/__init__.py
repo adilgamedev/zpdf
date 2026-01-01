@@ -182,6 +182,68 @@ class Document:
         finally:
             lib.zpdf_free_bounds(spans_ptr, out_count[0])
 
+    def extract_page_markdown(self, page_num: int) -> str:
+        """Extract text from a single page as Markdown.
+
+        Converts PDF content to Markdown with:
+        - Heading detection (based on font size)
+        - Paragraph detection (based on spacing)
+        - List detection (bullets and numbers)
+        - Table detection (column alignment)
+
+        Args:
+            page_num: Page number (0-indexed)
+
+        Returns:
+            Markdown-formatted text
+        """
+        self._check_open()
+        if page_num < 0 or page_num >= self.page_count:
+            raise PageNotFoundError(f"Page {page_num} not found")
+
+        out_len = ffi.new("size_t*")
+        buf_ptr = lib.zpdf_extract_page_markdown(self._handle, page_num, out_len)
+
+        if buf_ptr == ffi.NULL:
+            if out_len[0] == 0:
+                return ""  # Empty page
+            raise ExtractionError(f"Failed to extract markdown from page {page_num}")
+
+        try:
+            data = ffi.buffer(buf_ptr, out_len[0])[:]
+            return data.decode("utf-8", errors="replace")
+        finally:
+            lib.zpdf_free_buffer(buf_ptr, out_len[0])
+
+    def extract_all_markdown(self) -> str:
+        """Extract text from all pages as Markdown.
+
+        Converts entire PDF to Markdown with:
+        - Heading detection (based on font size)
+        - Paragraph detection (based on spacing)
+        - List detection (bullets and numbers)
+        - Table detection (column alignment)
+        - Page breaks as horizontal rules (---)
+
+        Returns:
+            Markdown-formatted text for entire document
+        """
+        self._check_open()
+        out_len = ffi.new("size_t*")
+
+        buf_ptr = lib.zpdf_extract_all_markdown(self._handle, out_len)
+
+        if buf_ptr == ffi.NULL:
+            if out_len[0] == 0:
+                return ""  # Empty document
+            raise ExtractionError("Failed to extract markdown")
+
+        try:
+            data = ffi.buffer(buf_ptr, out_len[0])[:]
+            return data.decode("utf-8", errors="replace")
+        finally:
+            lib.zpdf_free_buffer(buf_ptr, out_len[0])
+
     def __iter__(self) -> Iterator[str]:
         for i in range(self.page_count):
             yield self.extract_page(i)

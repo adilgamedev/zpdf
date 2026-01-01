@@ -27,3 +27,7 @@ void zpdf_free_bounds(CTextSpan* ptr, size_t count);
 uint8_t* zpdf_extract_page_reading_order(ZpdfDocument* doc, int page_num, size_t* out_len);
 uint8_t* zpdf_extract_all_reading_order(ZpdfDocument* doc, size_t* out_len);
 uint8_t* zpdf_extract_all_reading_order_parallel(ZpdfDocument* doc, size_t* out_len);
+
+// Markdown extraction
+uint8_t* zpdf_extract_page_markdown(ZpdfDocument* doc, int page_num, size_t* out_len);
+uint8_t* zpdf_extract_all_markdown(ZpdfDocument* doc, size_t* out_len);
