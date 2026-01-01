@@ -1,0 +1,38 @@
+#!/bin/bash
+# Pre-commit hook: run tests before committing
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Run Zig tests
+echo "Running Zig tests..."
+zig build test
+if [ $? -ne 0 ]; then
+    echo "Zig tests failed!"
+    exit 1
+fi
+
+# Build release
+echo "Building release..."
+zig build -Doptimize=ReleaseFast
+if [ $? -ne 0 ]; then
+    echo "Build failed!"
+    exit 1
+fi
+
+# Run Python tests if pytest is available
+if command -v python3 &> /dev/null; then
+    if python3 -c "import pytest" 2>/dev/null; then
+        echo "Running Python tests..."
+        PYTHONPATH=python python3 -m pytest python/tests -v --tb=short
+        if [ $? -ne 0 ]; then
+            echo "Python tests failed!"
+            exit 1
+        fi
+    else
+        echo "Skipping Python tests (pytest not installed)"
+    fi
+fi
+
+echo "All pre-commit checks passed!"
