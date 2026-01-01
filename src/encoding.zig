@@ -173,6 +173,8 @@ pub const FontEncoding = struct {
     is_cid: bool,
     /// Bytes per character (1 for simple, 1-4 for CID)
     bytes_per_char: u8,
+    /// Writing mode: 0 = horizontal (default), 1 = vertical (East Asian)
+    wmode: u8,
     /// Font metrics from FontDescriptor
     metrics: FontMetrics,
     /// Glyph widths
@@ -203,6 +205,7 @@ pub const FontEncoding = struct {
             .cmap_multi = .{},
             .is_cid = false,
             .bytes_per_char = 1,
+            .wmode = 0,
             .metrics = .{},
             .widths = GlyphWidths.init(allocator),
             .cid_system_info = .{},
@@ -750,6 +753,12 @@ fn getNumberU32(obj: Object) ?u32 {
 
 /// Apply predefined CMap encoding for CID fonts
 fn applyPredefinedCMap(encoding: *FontEncoding, name: []const u8) void {
+    // Detect vertical writing mode from CMap name suffix
+    // Names ending in "-V" indicate vertical writing (WMode=1)
+    if (name.len >= 2 and name[name.len - 2] == '-' and name[name.len - 1] == 'V') {
+        encoding.wmode = 1;
+    }
+
     // Identity CMaps - CID = Unicode (common for CJK fonts with ToUnicode)
     if (std.mem.eql(u8, name, "Identity-H") or std.mem.eql(u8, name, "Identity-V")) {
         // Identity mapping: the character codes are CIDs
@@ -769,11 +778,25 @@ fn applyPredefinedCMap(encoding: *FontEncoding, name: []const u8) void {
         return;
     }
 
-    // UTF-16 variants
+    // Vertical variants
+    if (std.mem.eql(u8, name, "UniGB-UCS2-V") or
+        std.mem.eql(u8, name, "UniCNS-UCS2-V") or
+        std.mem.eql(u8, name, "UniJIS-UCS2-V") or
+        std.mem.eql(u8, name, "UniKS-UCS2-V"))
+    {
+        encoding.bytes_per_char = 2;
+        return;
+    }
+
+    // UTF-16 variants (horizontal and vertical)
     if (std.mem.eql(u8, name, "UniGB-UTF16-H") or
         std.mem.eql(u8, name, "UniCNS-UTF16-H") or
         std.mem.eql(u8, name, "UniJIS-UTF16-H") or
-        std.mem.eql(u8, name, "UniKS-UTF16-H"))
+        std.mem.eql(u8, name, "UniKS-UTF16-H") or
+        std.mem.eql(u8, name, "UniGB-UTF16-V") or
+        std.mem.eql(u8, name, "UniCNS-UTF16-V") or
+        std.mem.eql(u8, name, "UniJIS-UTF16-V") or
+        std.mem.eql(u8, name, "UniKS-UTF16-V"))
     {
         encoding.bytes_per_char = 2;
         return;
@@ -842,6 +865,17 @@ pub fn parseToUnicodeCMap(allocator: std.mem.Allocator, stream: Object.Stream, e
         }
 
         if (pos >= data.len) break;
+
+        // Look for WMode definition: /WMode 1 def
+        if (matchAt(data, pos, "/WMode")) {
+            pos += 6;
+            skipWhitespace(data, &pos);
+            if (pos < data.len and data[pos] >= '0' and data[pos] <= '9') {
+                encoding.wmode = data[pos] - '0';
+            }
+            pos += 1;
+            continue;
+        }
 
         // Look for "beginbfchar" or "beginbfrange"
         if (matchAt(data, pos, "beginbfchar")) {

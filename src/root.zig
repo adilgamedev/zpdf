@@ -398,8 +398,17 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
         // Lazy-load fonts for this page
         self.ensurePageFonts(page_num);
 
-        // Simple text extraction using content lexer
-        try extractTextFromContent(arena, content, page_num, &self.font_cache, writer);
+        // Extract text with full Form XObject support
+        const ctx = ExtractionContext{
+            .allocator = arena,
+            .data = self.data,
+            .xref_table = &self.xref_table,
+            .object_cache = &self.object_cache,
+            .font_cache = &self.font_cache,
+            .page_num = page_num,
+            .depth = 0,
+        };
+        try extractTextFromContentFull(content, page.resources, &ctx, writer);
     }
 
     /// Extract text from all pages
@@ -554,6 +563,8 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
                 // Collect text in structure tree order
                 var result: std.ArrayList(u8) = .empty;
                 errdefer result.deinit(allocator);
+                // Pre-size: ~50 bytes per MCID on average
+                try result.ensureTotalCapacity(allocator, mcids.items.len * 50);
 
                 for (mcids.items) |mcr| {
                     if (extractor.getTextForMcid(mcr.mcid)) |text| {
@@ -599,6 +610,8 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
     fn extractTextStreamOrder(self: *Document, page_num: usize, allocator: std.mem.Allocator) ![]u8 {
         var output: std.ArrayList(u8) = .empty;
         errdefer output.deinit(allocator);
+        // Pre-size for typical page: ~2KB of text
+        try output.ensureTotalCapacity(allocator, 2048);
 
         const arena = self.parsing_arena.allocator();
         const page = self.pages.items[page_num];
@@ -631,6 +644,8 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
         if (!has_structure) {
             var result: std.ArrayList(u8) = .empty;
             errdefer result.deinit(allocator);
+            // Pre-size buffer: ~2KB average text per page
+            try result.ensureTotalCapacity(allocator, num_pages * 2048);
 
             const arena = self.parsing_arena.allocator();
             for (0..num_pages) |page_num| {
@@ -647,6 +662,8 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
         // Sequential extraction with structure tree
         var result: std.ArrayList(u8) = .empty;
         errdefer result.deinit(allocator);
+        // Pre-size buffer: ~2KB average text per page
+        try result.ensureTotalCapacity(allocator, num_pages * 2048);
 
         const arena = self.parsing_arena.allocator();
 
@@ -720,6 +737,19 @@ fn ensurePageFonts(self: *Document, page_idx: usize) void {
     };
 };
 
+/// Context for text extraction (allows Form XObject recursion)
+const ExtractionContext = struct {
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    xref_table: *const XRefTable,
+    object_cache: *std.AutoHashMap(u32, Object),
+    font_cache: *const std.StringHashMap(encoding.FontEncoding),
+    page_num: usize,
+    depth: u8, // Recursion depth for nested Form XObjects
+
+    const MAX_DEPTH: u8 = 10; // Prevent infinite recursion
+};
+
 /// Extract text from content stream using pre-resolved fonts
 fn extractTextFromContent(
     allocator: std.mem.Allocator,
@@ -728,11 +758,40 @@ fn extractTextFromContent(
     font_cache: *const std.StringHashMap(encoding.FontEncoding),
     writer: anytype,
 ) !void {
-    var lexer = interpreter.ContentLexer.init(allocator, content);
+    // Simple path without Form XObject support (for backward compatibility)
+    try extractTextFromContentWithContext(content, null, &.{
+        .allocator = allocator,
+        .data = &.{},
+        .xref_table = undefined,
+        .object_cache = undefined,
+        .font_cache = font_cache,
+        .page_num = page_num,
+        .depth = 0,
+    }, writer);
+}
+
+/// Extract text with full context (supports Form XObjects)
+fn extractTextFromContentFull(
+    content: []const u8,
+    resources: ?Object.Dict,
+    ctx: *const ExtractionContext,
+    writer: anytype,
+) !void {
+    try extractTextFromContentWithContext(content, resources, ctx, writer);
+}
+
+fn extractTextFromContentWithContext(
+    content: []const u8,
+    resources: ?Object.Dict,
+    ctx: *const ExtractionContext,
+    writer: anytype,
+) !void {
+    var lexer = interpreter.ContentLexer.init(ctx.allocator, content);
     var operands: [64]interpreter.Operand = undefined;
     var operand_count: usize = 0;
 
     var current_font: ?*const encoding.FontEncoding = null;
+    var prev_x: f64 = 0;
     var prev_y: f64 = 0;
     var font_size: f64 = 12;
 
@@ -776,29 +835,42 @@ fn extractTextFromContent(
                 if (op.len > 0) switch (op[0]) {
                     'B' => if (op.len == 2 and op[1] == 'T') {},
                     'E' => if (op.len == 2 and op[1] == 'T') {},
+                    'D' => if (op.len == 2 and op[1] == 'o') {
+                        // Do operator: invoke XObject
+                        if (operand_count >= 1 and operands[0] == .name) {
+                            try handleDoOperator(operands[0].name, resources, ctx, writer);
+                        }
+                    },
                     'T' => if (op.len == 2) switch (op[1]) {
                         'f' => if (operand_count >= 2) {
                             // Set font: /FontName size Tf
                             if (operands[0] == .name) {
                                 const font_name = operands[0].name;
-                                const key = std.fmt.bufPrint(&key_buf, "{d}:{s}", .{ page_num, font_name }) catch "";
-                                current_font = font_cache.getPtr(key);
+                                const key = std.fmt.bufPrint(&key_buf, "{d}:{s}", .{ ctx.page_num, font_name }) catch "";
+                                current_font = ctx.font_cache.getPtr(key);
                             }
                             font_size = operands[1].number;
                         },
                         'd', 'D' => if (operand_count >= 2) {
-                            const ty = operands[1].number;
-                            if (@abs(ty) > font_size * 0.5 and prev_y != 0) {
+                            // For vertical writing (WMode=1), check X displacement
+                            // For horizontal writing (WMode=0), check Y displacement
+                            const wmode = if (current_font) |f| f.wmode else 0;
+                            const displacement = if (wmode == 1) operands[0].number else operands[1].number;
+                            if (@abs(displacement) > font_size * 0.5 and prev_y != 0) {
                                 try writer.writeByte('\n');
                             }
-                            prev_y = ty;
+                            prev_y = operands[1].number;
                         },
                         'm' => if (operand_count >= 6) {
-                            const ty = operands[5].number;
-                            if (@abs(ty - prev_y) > font_size * 0.5 and prev_y != 0) {
+                            const wmode = if (current_font) |f| f.wmode else 0;
+                            // Tm sets full matrix: [a b c d e f] - e is X, f is Y
+                            const new_pos = if (wmode == 1) operands[4].number else operands[5].number;
+                            const prev_pos = if (wmode == 1) prev_x else prev_y;
+                            if (@abs(new_pos - prev_pos) > font_size * 0.5 and prev_pos != 0) {
                                 try writer.writeByte('\n');
                             }
-                            prev_y = ty;
+                            prev_x = operands[4].number;
+                            prev_y = operands[5].number;
                         },
                         '*' => {
                             try writer.writeByte('\n');
@@ -826,6 +898,77 @@ fn extractTextFromContent(
             },
         }
     }
+}
+
+/// Handle Do operator - extract text from Form XObjects
+fn handleDoOperator(
+    xobject_name: []const u8,
+    resources: ?Object.Dict,
+    ctx: *const ExtractionContext,
+    writer: anytype,
+) anyerror!void {
+    // Check recursion depth
+    if (ctx.depth >= ExtractionContext.MAX_DEPTH) return;
+
+    // Need valid context for XObject resolution
+    if (ctx.data.len == 0) return;
+
+    // Get XObject dictionary from resources
+    const res = resources orelse return;
+    const xobjects_obj = res.get("XObject") orelse return;
+
+    // Resolve XObject dictionary if it's a reference
+    const xobjects = switch (xobjects_obj) {
+        .dict => |d| d,
+        .reference => |ref| blk: {
+            const resolved = pagetree.resolveRef(ctx.allocator, ctx.data, ctx.xref_table, ref, @constCast(ctx.object_cache)) catch return;
+            break :blk switch (resolved) {
+                .dict => |d| d,
+                else => return,
+            };
+        },
+        else => return,
+    };
+
+    // Look up the specific XObject
+    const xobj = xobjects.get(xobject_name) orelse return;
+    const xobj_resolved = switch (xobj) {
+        .stream => |s| s,
+        .reference => |ref| blk: {
+            const resolved = pagetree.resolveRef(ctx.allocator, ctx.data, ctx.xref_table, ref, @constCast(ctx.object_cache)) catch return;
+            break :blk switch (resolved) {
+                .stream => |s| s,
+                else => return,
+            };
+        },
+        else => return,
+    };
+
+    // Check if it's a Form XObject
+    const subtype = xobj_resolved.dict.getName("Subtype") orelse return;
+    if (!std.mem.eql(u8, subtype, "Form")) return;
+
+    // Decompress the Form XObject content
+    const filter = xobj_resolved.dict.get("Filter");
+    const params = xobj_resolved.dict.get("DecodeParms");
+    const form_content = decompress.decompressStream(ctx.allocator, xobj_resolved.data, filter, params) catch return;
+    defer ctx.allocator.free(form_content);
+
+    // Get Form XObject's own resources (may inherit from parent)
+    const form_resources = xobj_resolved.dict.getDict("Resources") orelse resources;
+
+    // Recursively extract text with increased depth
+    const child_ctx = ExtractionContext{
+        .allocator = ctx.allocator,
+        .data = ctx.data,
+        .xref_table = ctx.xref_table,
+        .object_cache = ctx.object_cache,
+        .font_cache = ctx.font_cache,
+        .page_num = ctx.page_num,
+        .depth = ctx.depth + 1,
+    };
+
+    extractTextFromContentWithContext(form_content, form_resources, &child_ctx, writer) catch {};
 }
 
 fn writeTextWithFont(operand: interpreter.Operand, font: ?*const encoding.FontEncoding, writer: anytype) !void {
